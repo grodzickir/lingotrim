@@ -1,54 +1,69 @@
-"""Download small per-language text samples used to decide which tokens to keep."""
+"""Download per-language text samples used to decide which tokens to keep."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
+from .languages import resolve
+
 FINEWEB2 = "HuggingFaceFW/fineweb-2"
-SOURCES: dict[str, tuple[str, str | None, str]] = {
-    "en": ("HuggingFaceFW/fineweb-edu", "sample-10BT", "text"),
-    "pl": (FINEWEB2, "pol_Latn", "text"),
-    "de": (FINEWEB2, "deu_Latn", "text"),
-    "fr": (FINEWEB2, "fra_Latn", "text"),
-    "es": (FINEWEB2, "spa_Latn", "text"),
-    "it": (FINEWEB2, "ita_Latn", "text"),
-    "pt": (FINEWEB2, "por_Latn", "text"),
-    "nl": (FINEWEB2, "nld_Latn", "text"),
-    "cs": (FINEWEB2, "ces_Latn", "text"),
-    "uk": (FINEWEB2, "ukr_Cyrl", "text"),
-    "code": ("codeparrot/codeparrot-clean-valid", None, "content"),
-}
+ENGLISH = ("HuggingFaceFW/fineweb-edu", "sample-10BT", "text")
+CODE = ("codeparrot/codeparrot-clean-valid", None, "content")
+HELDOUT_SHARE = 0.1
 
 
-def parse_source(spec: str) -> tuple[str, str, str | None, str]:
-    """`pl` or `name=dataset[:config][@column]` -> (name, dataset, config, column)."""
-    if "=" not in spec:
-        if spec not in SOURCES:
-            raise ValueError(f"unknown language {spec!r}; use name=dataset[:config][@column]")
-        return (spec, *SOURCES[spec])
-    name, rest = spec.split("=", 1)
-    rest, _, column = rest.partition("@")
-    dataset, _, config = rest.partition(":")
-    return name, dataset, config or None, column or "text"
+@dataclass(frozen=True)
+class Source:
+    name: str
+    dataset: str
+    config: str | None
+    column: str
+
+
+def parse_source(spec: str) -> Source:
+    """`pl`, `code`, `pol_Latn` or `name=dataset[:config][@column]`."""
+    if "=" in spec:
+        name, rest = spec.split("=", 1)
+        rest, _, column = rest.partition("@")
+        dataset, _, config = rest.partition(":")
+        return Source(name, dataset, config or None, column or "text")
+    if spec == "code":
+        return Source("code", *CODE)
+    if spec == "en":
+        return Source("en", *ENGLISH)
+    lang = resolve(spec)
+    if lang.fineweb2 is None:
+        return Source(lang.code, *ENGLISH)
+    return Source(lang.code, FINEWEB2, lang.fineweb2, "text")
 
 
 def download(specs: list[str], out_dir: Path, chars_per_source: int = 20_000_000) -> list[Path]:
+    """Write `<out>/fit/<name>.txt` and `<out>/heldout/<name>.txt`; skip sources already present."""
     from datasets import load_dataset
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    fit_dir, heldout_dir = out_dir / "fit", out_dir / "heldout"
+    fit_dir.mkdir(parents=True, exist_ok=True)
+    heldout_dir.mkdir(parents=True, exist_ok=True)
     written = []
     for spec in specs:
-        name, dataset, config, column = parse_source(spec)
-        ds = load_dataset(dataset, config, split="train", streaming=True)
-        path = out_dir / f"{name}.txt"
+        src = parse_source(spec)
+        fit_path, heldout_path = fit_dir / f"{src.name}.txt", heldout_dir / f"{src.name}.txt"
+        if fit_path.exists() and heldout_path.exists():
+            print(f"{src.name}: already downloaded")
+            written.append(fit_path)
+            continue
+        ds = load_dataset(src.dataset, src.config, split="train", streaming=True)
+        heldout_budget = int(chars_per_source * HELDOUT_SHARE)
         total = 0
-        with path.open("w", encoding="utf-8") as fh:
+        with heldout_path.open("w", encoding="utf-8") as heldout, fit_path.open("w", encoding="utf-8") as fit:
             for row in ds:
-                text = row[column]
-                fh.write(text.replace("\r", "") + "\n")
+                text = row[src.column].replace("\r", "") + "\n"
+                (heldout if total < heldout_budget else fit).write(text)
                 total += len(text)
                 if total >= chars_per_source:
                     break
-        written.append(path)
-        print(f"{name}: {total:,} chars from {dataset}{':' + config if config else ''} -> {path}")
+        written.append(fit_path)
+        label = f"{src.dataset}{':' + src.config if src.config else ''}"
+        print(f"{src.name}: {total:,} chars from {label}")
     return written

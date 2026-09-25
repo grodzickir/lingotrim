@@ -1,0 +1,12 @@
+{
+  "name": "lingotrim",
+  "version": "0.1.0",
+  "description": "Trim multilingual LLMs down to the languages you actually use - losslessly, then export GGUF/Ollama. npx wrapper around the Python tool.",
+  "bin": { "lingotrim": "bin.cjs" },
+  "files": ["bin.cjs", "README.md"],
+  "keywords": ["llm", "tokenizer", "vocabulary", "pruning", "qwen", "gguf", "ollama"],
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/grodzickir/lingotrim" },
+  "engines": { "node": ">=18" },
+  "dependencies": { "@manzt/uv": "^0.8.13" }
+}

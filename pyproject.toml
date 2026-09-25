@@ -11,11 +11,13 @@ dependencies = [
     "numpy>=1.26",
     "regex>=2024.0",
     "tokenizers>=0.20",
+    "huggingface_hub>=0.30",
 ]
 
 [project.optional-dependencies]
 corpus = ["datasets>=3.0"]
 verify = ["torch>=2.4", "transformers>=4.50"]
+gguf = ["torch>=2.4", "transformers>=4.50", "gguf>=0.17", "sentencepiece>=0.2", "protobuf>=4.21"]
 
 [project.scripts]
 lingotrim = "lingotrim.cli:main"

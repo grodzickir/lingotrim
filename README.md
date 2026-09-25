@@ -1,102 +1,132 @@
 # lingotrim
 
-**Trim multilingual LLMs down to the languages you actually use — losslessly and verifiably.**
+**Trim multilingual LLMs down to the languages you actually use — losslessly, verifiably, in one command.**
 
-Modern open models ship with huge multilingual vocabularies (Qwen3.8: 248k tokens), but most
-deployments only ever see one or two languages plus code. `lingotrim` removes the tokens you never
-use from the tokenizer, the input embeddings and the LM head, and then **proves** the trimmed model
-behaves identically on your target languages.
+Open models ship with huge multilingual vocabularies (Qwen3.8: 248k tokens across 28 scripts), but
+most people use English plus one language, plus code. `lingotrim` keeps exactly those, removes the
+rest from the tokenizer, embeddings and LM head, **proves** the trimmed model is identical on your
+languages, and exports a quantized GGUF you can run in Ollama.
+
+```bash
+npx lingotrim run Qwen/Qwen3-0.6B --languages en,pl --quantize Q4_K_M --ollama qwen3-0.6b-enpl
+# or, with uv:  uvx --from "lingotrim[corpus,gguf]" lingotrim run ...
+```
 
 ```text
-$ lingotrim trim Qwen/Qwen3-0.6B qwen3-0.6b-enpl --corpus corpus/en.txt corpus/pl.txt corpus/code.txt
-vocab: 151,936 -> 98,000 (-35.5%)
-weights: 1.40 GB -> 1.19 GB, 110.5M parameters removed
-
-$ lingotrim verify Qwen/Qwen3-0.6B qwen3-0.6b-enpl --corpus heldout/ --logits
-tokenization: LOSSLESS on 4,813 texts / 849,245 tokens
-  vocabulary coverage: 99.9580% of tokens kept
-logits: max |diff| on kept tokens = 0.00e+00
+== 1/6 model      downloading Qwen/Qwen3-0.6B
+== 2/6 corpus     en / pl / code samples (FineWeb-Edu, FineWeb-2, CodeParrot)
+== 3/6 trim       vocab 151,936 -> 97,323 (-35.9%), 112M parameters removed
+== 4/6 verify     tokenization LOSSLESS, coverage 99.91% on 1,542 held-out texts
+== 5/6 gguf       pre-tokenizer: qwen2 -> trimmed-en-pl-code-bf16.gguf
+== 6/6 quantize   Q4_K_M 382 MiB (5.01 BPW) -> ollama model: qwen3-0.6b-enpl
 ```
+
+```text
+$ ollama run qwen3-0.6b-enpl "Odpowiedz krótko po polsku: ile to jest 7 razy 8?"
+7 razy 8 to 56.
+```
+
+Any language in the table below works the same way: `--languages en,de`, `--languages ja`,
+`--languages en,uk,pl`. English is always kept (it dominates instruction tuning); code is kept
+unless you pass `--no-code`.
 
 ## Why it is lossless
 
-1. **Token selection** — keep every token seen in a target-language corpus, all pure-ASCII tokens
-   (code, English), all special tokens and optionally whole Unicode scripts (`--scripts Latin`).
-2. **BPE merge ancestry closure** — BPE builds tokens from intermediate tokens. If a kept token is
-   produced by `a + b`, both `a` and `b` are kept too, recursively. This guarantees that any text
-   whose original tokenization uses only kept tokens is tokenized *identically* after trimming.
-3. **Byte fallback stays intact** — the 256 byte-level base tokens are always kept, so text in a
-   removed language still encodes and decodes correctly; it just costs more tokens.
-4. **Row slicing, not retraining** — the kept rows of every vocab-sized tensor are copied verbatim,
-   so logits for kept tokens are bit-identical. Transformer layers are untouched.
+1. **Token selection** — keep every token that appears when tokenizing a sample of your languages,
+   all pure-ASCII tokens (code, English), all special tokens, and optionally whole Unicode scripts.
+2. **BPE merge ancestry closure** — if a kept token is built by merging `a + b`, both parts are kept
+   too, recursively. Any text whose original tokenization used only kept tokens is tokenized
+   *identically* after trimming.
+3. **Byte fallback stays intact** — the 256 byte-level base tokens are always kept, so removed
+   languages still encode and decode correctly, just with more tokens.
+4. **Row slicing, not retraining** — kept rows of every vocab-sized tensor are copied verbatim, so
+   logits for kept tokens are bit-identical. Transformer layers are untouched.
+5. **Verification is part of the pipeline** — held-out text is tokenized with both tokenizers and
+   compared; the run aborts before export if anything differs. `--verify-logits` additionally
+   compares model outputs (small models).
 
 Weight slicing works directly on `safetensors` bytes (memory-mapped, streamed shard by shard, any
 dtype including BF16/FP8), so trimming a 27B model needs neither a GPU nor torch.
 
-## Real numbers
+## Results
 
-| Model | Target | Vocab | Removed params | Size impact |
+| Model | Languages | Vocabulary | Removed params | Weights |
 |---|---|---|---|---|
-| Qwen3-0.6B | EN + PL + code | 151,936 → 98,000 (−35.5%) | 110.5M | −15% (1.40 → 1.19 GB) |
-| Qwen3.8-27B | EN + PL + code | 248,320 → 132,143 (−46.8%) | ~595M | ~−2% (≈1.2 GB of BF16) |
+| Qwen3-0.6B | en + pl + code | 151,936 → 97,323 (−35.9%) | 112M | 1.40 → 1.19 GB (−15%) |
+| Qwen3.8-27B | en + pl + code | 248,320 → 132,143 (−46.8%) | ~595M | ≈ −1.2 GB of BF16 (−2%) |
 
 Token counts after trimming (Qwen3-0.6B): Polish 24 → 24, German 13 → 16, Russian 16 → 33,
-Chinese 7 → 14 — target languages are unaffected, removed languages fall back to bytes.
+Chinese 7 → 14 — target languages unaffected, removed languages fall back to bytes.
 
-**Honest take:** vocabulary trimming is a big win for small models (and for embedding/LM-head
-bound workloads like large-batch prompt processing), but for 27B+ models the embeddings are only a
-few percent of the weights. Removing a language's *knowledge* from the transformer layers requires
-lossy structural pruning plus healing — see the roadmap.
+**Honest take:** vocabulary trimming is a big win for small models and for embedding/LM-head-bound
+workloads (large-batch prompt processing, speculative decoding drafts). For 27B+ models the
+embeddings are only a few percent of the weights; removing a language's *knowledge* from the
+transformer layers needs lossy structural pruning plus healing — see the roadmap.
 
 ## Install
 
 ```bash
-uv tool install git+https://github.com/<you>/lingotrim            # core (numpy, tokenizers, regex)
-uv tool install "lingotrim[corpus,verify] @ git+https://github.com/<you>/lingotrim"
+npx lingotrim --help                                   # Node 18+, no Python needed (uv installs it)
+uv tool install "lingotrim[corpus,gguf]"               # or as a uv tool
+pip install "lingotrim[corpus,gguf]"                   # or plain pip
 ```
+
+Extras: `corpus` (Hugging Face `datasets` for language samples), `gguf` (torch CPU + transformers
+for `convert_hf_to_gguf.py`), `verify` (logit comparison). The core trim/verify path needs only
+`numpy`, `tokenizers` and `regex`.
+
+`llama.cpp` (converter + prebuilt `llama-quantize` for Windows, Linux, macOS) is downloaded on
+first use into `~/.cache/lingotrim` (`%LOCALAPPDATA%\lingotrim` on Windows). Point `LLAMA_CPP_DIR`
+or `--llama-cpp` at your own checkout/build to skip that.
 
 ## Usage
 
 ```bash
-# 1. What is in the vocabulary?
-lingotrim inspect path/to/model
+# Everything in one go (idempotent: rerun to resume after a failure)
+lingotrim run Qwen/Qwen3.8-27B --languages en,pl --out ./qwen3.8-enpl \
+    --quantize Q4_K_M Q5_K_M --ollama qwen3.8-27b-enpl
 
-# 2. Get language samples (FineWeb / FineWeb-2 / code); or bring your own text files
-lingotrim corpus en pl code --out corpus --chars 5000000
-lingotrim corpus mydomain=my-org/my-dataset:config@text --out corpus
+# Local model dir, your own corpus, no GGUF
+lingotrim run ./my-model -l en,de --source legal=my-org/legal-corpus@body --out ./out
 
-# 3. Trim
-lingotrim trim path/to/model path/to/model-enpl --corpus corpus/
-
-# 4. Verify on held-out text (use --logits for small models; needs the `verify` extra)
-lingotrim verify path/to/model path/to/model-enpl --corpus heldout/ --logits
+# Individual steps
+lingotrim inspect ./model                                 # vocabulary by Unicode script
+lingotrim corpus en pl code --out corpus --chars 20000000 # writes corpus/fit and corpus/heldout
+lingotrim trim ./model ./model-enpl --corpus corpus/fit
+lingotrim verify ./model ./model-enpl --corpus corpus/heldout --logits
+lingotrim export ./model ./model-enpl --out model-enpl.gguf --quantize Q4_K_M --ollama my-model
 ```
 
-Every run writes `lingotrim_report.json` with vocabulary sizes, reasons each token was kept, removed
-parameters and bytes saved.
+`run` writes `run-<languages>.json` (summary) and `lingotrim_report.json` (why each token was
+kept, sliced tensors, bytes saved) into the output directory.
+
+### Languages
+
+`en pl de fr es it pt nl sv da no fi cs sk hu ro hr sl lt lv et tr vi id ms ca uk ru bg sr el he
+ar fa hi bn ta th zh ja ko` — plus any raw FineWeb-2 config such as `pol_Latn`, and custom
+sources via `--source name=dataset[:config][@column]`.
 
 ## Supported models
 
 Byte-level BPE tokenizers in Hugging Face `tokenizer.json` format with `safetensors` weights: Qwen
-2/2.5/3/3.x, Llama 3.x, GPT-style models and most of their fine-tunes. Token ids referenced in
-`config.json` / `generation_config.json` (`*_token_id`, including nested `text_config`) and in
-`tokenizer_config.json` are remapped automatically.
+2 / 2.5 / 3 / 3.x, Llama 3.x, GPT-style models and their fine-tunes. Token ids referenced in
+`config.json`, `generation_config.json` (including nested `text_config`) and `tokenizer_config.json`
+are remapped automatically. GGUF export pins the original pre-tokenizer type, which llama.cpp's
+converter would otherwise fail to detect for a trimmed vocabulary.
 
-Not yet supported: SentencePiece-style tokenizers (Gemma, Mistral v1/v2, Llama 2), models with
-block-quantized embeddings (scale tensors not sliced).
+Not yet supported: SentencePiece tokenizers (Gemma, Mistral, Llama 2), block-quantized checkpoints
+(scale tensors are not sliced), vision projectors (`--mmproj`) — the text model is exported.
 
 ## Roadmap
 
-The full "specialize a general model for my languages and my domain" pipeline:
-
 | Stage | What | Lossless | Status |
 |---|---|---|---|
-| 1. Vocabulary trimming | tokenizer + embeddings + LM head | yes | ✅ done |
-| 2. GGUF export | llama.cpp conversion of the trimmed model (register tokenizer hash) | yes | planned |
-| 3. Structural pruning | drop FFN channels / heads / layers least active on target-language + code calibration data (Compact, Minitron-style width pruning) | no | planned |
-| 4. Healing & specialization | distill from the original model on target-language + domain (e.g. code) data, LoRA or full FT | — | planned |
-| 5. Quantization | GGUF k-quants / QAT / ternary | no | planned |
-| 6. Eval harness | per-language perplexity + downstream (e.g. HumanEval, Polish benchmarks) before/after each stage | — | planned |
+| 1. Vocabulary trimming | tokenizer + embeddings + LM head | yes | done |
+| 2. GGUF export + quantization + Ollama | llama.cpp converter and k-quants | yes / quant | done |
+| 3. npm / npx distribution | `npx lingotrim` via uv | — | done |
+| 4. Structural pruning | drop FFN channels / heads / layers least active on target-language + code calibration data | no | planned |
+| 5. Healing & specialization | distill from the original on target-language + domain (e.g. code) data | — | planned |
+| 6. Eval harness | per-language perplexity + downstream benchmarks before/after each stage | — | planned |
 
 ## Development
 

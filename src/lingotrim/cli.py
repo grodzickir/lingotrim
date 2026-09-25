@@ -72,6 +72,45 @@ def _cmd_verify(args) -> int:
     return 0 if result.lossless else 1
 
 
+def _cmd_export(args) -> int:
+    from .llamacpp import LlamaCpp, ollama_create
+
+    llama = LlamaCpp.ensure(args.llama_cpp)
+    original, trimmed, out = Path(args.original), Path(args.trimmed), Path(args.out)
+    pre = llama.detect_pre_tokenizer(original)
+    print(f"pre-tokenizer: {pre}")
+    final = llama.convert(trimmed, out, pre, args.outtype)
+    for qtype in args.quantize:
+        final = llama.quantize(out, out.with_name(f"{out.stem}-{qtype}.gguf"), qtype)
+        print(f"quantized: {final}")
+    if args.ollama:
+        ollama_create(args.ollama, final)
+    return 0
+
+
+def _cmd_run(args) -> int:
+    from .run import RunConfig, run
+
+    languages = [x.strip() for x in args.languages.split(",") if x.strip()]
+    cfg = RunConfig(
+        model=args.model,
+        out=Path(args.out),
+        languages=languages,
+        code=not args.no_code,
+        corpus_chars=args.corpus_chars,
+        extra_sources=args.source,
+        scripts=[s for s in args.scripts.split(",") if s],
+        min_freq=args.min_freq,
+        quantize=args.quantize,
+        gguf_type=args.gguf or ("bf16" if (args.quantize or args.ollama) else None),
+        ollama=args.ollama,
+        llama_cpp=args.llama_cpp,
+        verify_logits=args.verify_logits,
+    )
+    run(cfg)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="lingotrim", description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
@@ -104,12 +143,40 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--atol", type=float, default=1e-3)
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=_cmd_verify)
+
+    s = sub.add_parser("export", help="convert a trimmed model to GGUF and optionally quantize")
+    s.add_argument("original", help="untrimmed model dir (used to detect the pre-tokenizer type)")
+    s.add_argument("trimmed", help="trimmed model dir")
+    s.add_argument("--out", required=True, help="output .gguf path (full precision)")
+    s.add_argument("--outtype", default="bf16", choices=["f32", "f16", "bf16", "q8_0"])
+    s.add_argument("--quantize", nargs="*", default=[], help="k-quant types, e.g. Q4_K_M Q5_K_M")
+    s.add_argument("--ollama", help="also import the last GGUF into Ollama under this name")
+    s.add_argument("--llama-cpp", help="llama.cpp checkout/build dir (default: auto-download)")
+    s.set_defaults(func=_cmd_export)
+
+    s = sub.add_parser("run", help="whole pipeline: download -> corpus -> trim -> verify -> gguf -> quantize")
+    s.add_argument("model", help="Hugging Face repo id (e.g. Qwen/Qwen3-0.6B) or local model dir")
+    s.add_argument("--languages", "-l", required=True, help="comma-separated, e.g. en,pl (en is always kept)")
+    s.add_argument("--no-code", action="store_true", help="do not keep source-code tokens")
+    s.add_argument("--out", "-o", default="lingotrim-out", help="work/output directory")
+    s.add_argument("--corpus-chars", type=int, default=20_000_000, help="characters per language sample")
+    s.add_argument("--source", action="append", default=[],
+                   help="extra corpus: name=dataset[:config][@column]")
+    s.add_argument("--scripts", default="", help="also keep whole Unicode scripts, e.g. Latin")
+    s.add_argument("--min-freq", type=int, default=1)
+    s.add_argument("--gguf", nargs="?", const="bf16", default=None, metavar="TYPE",
+                   help="export GGUF (default type bf16 when flag given without value)")
+    s.add_argument("--quantize", "-q", nargs="*", default=[], help="k-quant types, e.g. Q4_K_M")
+    s.add_argument("--ollama", help="import final GGUF into Ollama under this name")
+    s.add_argument("--llama-cpp", help="llama.cpp dir (default: auto-download pinned release)")
+    s.add_argument("--verify-logits", action="store_true", help="also compare logits (small models)")
+    s.set_defaults(func=_cmd_run)
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
-        stream.reconfigure(encoding="utf-8", errors="replace")
+        stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     args = build_parser().parse_args(argv)
     return args.func(args)
 
