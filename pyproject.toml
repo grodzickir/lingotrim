@@ -1,7 +1,7 @@
 [project]
 name = "lingotrim"
 version = "0.1.0"
-description = "Trim multilingual LLMs down to the languages you actually use - losslessly and verifiably."
+description = "Trim a multilingual LLM's vocabulary (tokenizer, embeddings, LM head) down to the languages you use, with a tokenization check on held-out text."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

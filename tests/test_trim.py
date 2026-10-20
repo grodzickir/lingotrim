@@ -26,7 +26,7 @@ def test_target_languages_tokenize_identically(model_dir, corpus_dir, tmp_path):
 
     assert report.vocab_after < report.vocab_before
     check = check_tokenization(model_dir, out, [TEXTS["en"], TEXTS["pl"], TEXTS["code"]])
-    assert check.lossless, check.examples
+    assert check.preserved, check.examples
 
 
 def test_removed_languages_still_round_trip_through_bytes(model_dir, corpus_dir, tmp_path):
@@ -97,5 +97,5 @@ def test_script_mode_keeps_whole_scripts(model_dir, tmp_path):
     out = tmp_path / "out"
     trim_model(model_dir, out, [], SelectionConfig(scripts=["Cyrillic"]))
     check = check_tokenization(model_dir, out, [TEXTS["ru"], TEXTS["en"]])
-    assert check.lossless, check.examples
+    assert check.preserved, check.examples
     assert check_tokenization(model_dir, out, [TEXTS["zh"]]).texts_with_removed_tokens == 1

@@ -53,7 +53,7 @@ def _cmd_verify(args) -> int:
 
     texts = list(iter_corpus_texts(args.corpus, chunk_chars=500))
     result = check_tokenization(Path(args.original), Path(args.trimmed), texts)
-    status = "LOSSLESS" if result.lossless else "BUG: UNEXPECTED MISMATCH"
+    status = "preserved on all checked texts" if result.preserved else "MISMATCH (bug)"
     print(f"tokenization: {status} on {result.texts:,} texts / {result.tokens:,} tokens")
     print(f"  vocabulary coverage: {result.coverage:.4%} of tokens kept "
           f"({result.texts_with_removed_tokens:,} texts used removed tokens, re-encoded as bytes)")
@@ -134,13 +134,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-ascii", action="store_true", help="do not force-keep pure ASCII tokens")
     s.set_defaults(func=_cmd_trim)
 
-    s = sub.add_parser("verify", help="prove the trimmed model behaves identically")
+    s = sub.add_parser("verify", help="check that the trimmed tokenizer reproduces the original tokenization on held-out text")
     s.add_argument("original")
     s.add_argument("trimmed")
     s.add_argument("--corpus", nargs="+", required=True, help="held-out target-language text")
-    s.add_argument("--logits", action="store_true", help="also compare logits (needs `verify`)")
+    s.add_argument("--logits", action="store_true",
+                   help="also measure max logit difference on kept tokens (optional, small models, needs `verify`)")
     s.add_argument("--logit-samples", type=int, default=8)
-    s.add_argument("--atol", type=float, default=1e-3)
+    s.add_argument("--atol", type=float, default=1e-3, help="fail if max logit diff exceeds this")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=_cmd_verify)
 

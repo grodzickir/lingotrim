@@ -21,8 +21,8 @@ class TokenizationCheck:
     examples: list[str] = field(default_factory=list)
 
     @property
-    def lossless(self) -> bool:
-        """No text made only of kept tokens tokenizes differently."""
+    def preserved(self) -> bool:
+        """No checked text differs. Texts containing a removed token are skipped (see `coverage`)."""
         return self.unexpected_mismatches == 0
 
     @property
@@ -39,7 +39,12 @@ def old_to_new_ids(original: Path, trimmed: Path) -> dict[int, int]:
 
 
 def check_tokenization(original: Path, trimmed: Path, texts: Iterable[str]) -> TokenizationCheck:
-    """Target-language text must tokenize to exactly the same tokens before and after."""
+    """Compare tokenization before/after trimming on `texts`.
+
+    Only texts whose original tokenization uses exclusively kept tokens are compared; texts that
+    contain a removed token are counted (`texts_with_removed_tokens`, `coverage`) but skipped, since
+    they are expected to tokenize differently. So this checks the texts you give it, not all text.
+    """
     remap = old_to_new_ids(original, trimmed)
     tok_old = Tokenizer.from_file(str(original / "tokenizer.json"))
     tok_new = Tokenizer.from_file(str(trimmed / "tokenizer.json"))
@@ -64,8 +69,12 @@ def check_tokenization(original: Path, trimmed: Path, texts: Iterable[str]) -> T
     return result
 
 
-def check_logits(original: Path, trimmed: Path, texts: list[str], atol: float = 1e-3) -> float:
-    """Max |logit difference| on kept tokens. Needs the `verify` extra; small models only."""
+def check_logits(original: Path, trimmed: Path, texts: list[str]) -> float:
+    """Max |logit difference| on kept tokens, in float32 on CPU/default device.
+
+    Optional and small models only (loads both models). Not part of the test suite or CI. The result
+    is a measurement: compare it against a tolerance of your choosing (the CLI default is 1e-3).
+    """
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 

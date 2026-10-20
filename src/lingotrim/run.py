@@ -85,12 +85,13 @@ def run(cfg: RunConfig) -> dict:
     texts = list(iter_corpus_texts([corpus / "heldout"], chunk_chars=500))
     check = check_tokenization(original, trimmed, texts)
     result["verify"] = {
-        "lossless": check.lossless, "coverage": check.coverage, "texts": check.texts,
+        "tokenization_preserved": check.preserved, "coverage": check.coverage, "texts": check.texts,
         "top_removed": check.top_removed,
     }
-    print(f"tokenization {'LOSSLESS' if check.lossless else 'MISMATCH'}, "
-          f"coverage {check.coverage:.4%} on {check.texts:,} held-out texts")
-    if not check.lossless:
+    print(f"tokenization {'preserved' if check.preserved else 'MISMATCH'}, "
+          f"token coverage {check.coverage:.4%} on {check.texts:,} held-out texts "
+          f"({check.texts_with_removed_tokens:,} texts with removed tokens were skipped)")
+    if not check.preserved:
         raise RuntimeError("trimmed tokenizer diverged on kept tokens; aborting before export")
     if cfg.verify_logits:
         worst = check_logits(original, trimmed, texts[:8])
