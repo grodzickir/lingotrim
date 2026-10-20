@@ -56,7 +56,8 @@ def download(specs: list[str], out_dir: Path, chars_per_source: int = 20_000_000
         ds = load_dataset(src.dataset, src.config, split="train", streaming=True)
         heldout_budget = int(chars_per_source * HELDOUT_SHARE)
         total = 0
-        with heldout_path.open("w", encoding="utf-8") as heldout, fit_path.open("w", encoding="utf-8") as fit:
+        with heldout_path.open("w", encoding="utf-8", newline="\n") as heldout, \
+                fit_path.open("w", encoding="utf-8", newline="\n") as fit:
             for row in ds:
                 text = row[src.column].replace("\r", "") + "\n"
                 (heldout if total < heldout_budget else fit).write(text)

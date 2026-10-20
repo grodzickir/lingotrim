@@ -45,7 +45,7 @@ def _load_json(path: Path) -> dict | None:
 
 
 def _dump_json(path: Path, data: dict) -> None:
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 
 def _walk_token_ids(node, fn) -> None:
@@ -162,7 +162,8 @@ def _write_slow_tokenizer_files(src: Path, dst: Path, new_tok: dict) -> None:
         _dump_json(dst / "vocab.json", new_tok["model"]["vocab"])
     if (src / "merges.txt").exists():
         merges = [m if isinstance(m, str) else " ".join(m) for m in new_tok["model"]["merges"]]
-        (dst / "merges.txt").write_text("#version: 0.2\n" + "\n".join(merges) + "\n", encoding="utf-8")
+        text = "#version: 0.2\n" + "\n".join(merges) + "\n"
+        (dst / "merges.txt").write_text(text, encoding="utf-8", newline="\n")
 
 
 def _trim_weights(src: Path, dst: Path, vocab_rows: int, keep: np.ndarray, report: TrimReport):

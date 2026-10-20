@@ -128,6 +128,7 @@ def run(cfg: RunConfig) -> dict:
             calib.write_text(
                 "".join(f.read_text(encoding="utf-8", errors="replace")[:budget] for f in fit_files),
                 encoding="utf-8",
+                newline="\n",
             )
             llama.imatrix(base, calib, imatrix_path)
         result["imatrix"] = str(imatrix_path)
@@ -148,6 +149,6 @@ def run(cfg: RunConfig) -> dict:
 
 def _finish(cfg: RunConfig, result: dict) -> dict:
     path = cfg.out / f"run-{cfg.tag}.json"
-    path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
     print(f"summary: {path}")
     return result

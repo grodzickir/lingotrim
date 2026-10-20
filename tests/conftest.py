@@ -60,12 +60,12 @@ def model_dir(tmp_path: Path) -> Path:
     image = tok.token_to_id("<|im_start|>")
     config = {"architectures": ["Fake"], "vocab_size": vocab_rows, "eos_token_id": [eos],
               "text_config": {"vocab_size": vocab_rows, "image_token_id": image}}
-    (d / "config.json").write_text(json.dumps(config))
-    (d / "generation_config.json").write_text(json.dumps({"eos_token_id": eos}))
+    (d / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    (d / "generation_config.json").write_text(json.dumps({"eos_token_id": eos}), encoding="utf-8")
     (d / "tokenizer_config.json").write_text(json.dumps({
         "added_tokens_decoder": {str(tok.token_to_id(s)): {"content": s} for s in SPECIALS}
-    }))
-    (d / "chat_template.jinja").write_text("{{ messages }}")
+    }), encoding="utf-8")
+    (d / "chat_template.jinja").write_text("{{ messages }}", encoding="utf-8")
 
     rng = np.random.default_rng(0)
     embed = rng.standard_normal((vocab_rows, HIDDEN)).astype(np.float32)
@@ -82,7 +82,7 @@ def model_dir(tmp_path: Path) -> Path:
     (d / "model.safetensors.index.json").write_text(json.dumps({
         "metadata": {"total_size": 0},
         "weight_map": {"model.embed_tokens.weight": "model-00001-of-00002.safetensors"},
-    }))
+    }), encoding="utf-8")
     return d
 
 

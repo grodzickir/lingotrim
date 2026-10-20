@@ -48,8 +48,15 @@ def latest_tag() -> str:
 def _download(url: str, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     print(f"downloading {url}")
-    with urllib.request.urlopen(url, timeout=60) as resp, dst.open("wb") as fh:
-        shutil.copyfileobj(resp, fh)
+    try:
+        with urllib.request.urlopen(url, timeout=60) as resp, dst.open("wb") as fh:
+            shutil.copyfileobj(resp, fh)
+    except OSError as exc:  # URLError / HTTPError are OSError subclasses
+        dst.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"could not download {url} ({exc}). Check your connection or point --llama-cpp / "
+            "LLAMA_CPP_DIR at an existing llama.cpp checkout or build."
+        ) from exc
 
 
 def _extract(archive: Path, dst: Path) -> None:
@@ -59,7 +66,15 @@ def _extract(archive: Path, dst: Path) -> None:
             zf.extractall(dst)
     else:
         with tarfile.open(archive) as tf:
-            tf.extractall(dst, filter="data")
+            if hasattr(tarfile, "data_filter"):  # Python >= 3.10.12 / 3.11.4
+                tf.extractall(dst, filter="data")
+            else:
+                root = dst.resolve()
+                for member in tf.getmembers():
+                    target = (root / member.name).resolve()
+                    if not target.is_relative_to(root) or member.issym() or member.islnk():
+                        raise RuntimeError(f"refusing to extract unsafe archive member: {member.name}")
+                tf.extractall(dst)
 
 
 # get_vocab_base_pre moved from ModelBase to TextModel in newer llama.cpp; patch wherever it lives.
@@ -102,12 +117,17 @@ class LlamaCpp:
         return cls(src, _find_bin_dir(bin_root))
 
     def binary(self, name: str) -> Path:
-        exe = name + (".exe" if sys.platform == "win32" else "")
+        """Resolve a llama.cpp binary: the llama.cpp dir (flag / LLAMA_CPP_DIR / download), then PATH."""
+        exe = _exe(name)
         if self.bin_dir and (self.bin_dir / exe).exists():
             return self.bin_dir / exe
         if found := shutil.which(name):
             return Path(found)
-        raise FileNotFoundError(f"{exe} not found; set LLAMA_CPP_DIR or let lingotrim download a release")
+        raise FileNotFoundError(
+            f"{exe} not found. Pass --llama-cpp DIR or set LLAMA_CPP_DIR to a llama.cpp build "
+            f"(containing {exe}, or in build/bin), put it on PATH, or omit --llama-cpp so lingotrim "
+            "downloads a prebuilt release."
+        )
 
     def detect_pre_tokenizer(self, original_model: Path) -> str:
         """Ask llama.cpp which `tokenizer.ggml.pre` the untrimmed tokenizer maps to."""
@@ -120,24 +140,31 @@ class LlamaCpp:
         )
         out = subprocess.run(
             [sys.executable, "-c", code, str(self.source), str(original_model)],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
+            env=_child_env(),
         ).stdout
         return next(line for line in out.splitlines() if line.startswith("PRE=")).removeprefix("PRE=")
 
     def convert(self, model_dir: Path, out_file: Path, pre_tokenizer: str, outtype: str = "bf16") -> Path:
         """Run convert_hf_to_gguf.py with the pre-tokenizer pinned (the trimmed vocab changes its hash)."""
         out_file.parent.mkdir(parents=True, exist_ok=True)
+        if not (self.source / "convert_hf_to_gguf.py").is_file():
+            raise FileNotFoundError(
+                f"convert_hf_to_gguf.py not found in {self.source}; --llama-cpp / LLAMA_CPP_DIR must point "
+                "at a llama.cpp source checkout (not only a binary directory)."
+            )
         code = (
             "import sys, runpy; sys.path.insert(0, sys.argv[1])\n"
             + _FIND_VOCAB_CLASS
             + "pre = sys.argv[2]\n"
             "cls.get_vocab_base_pre = lambda self, tokenizer: pre\n"
-            "sys.argv = [sys.argv[1] + '/convert_hf_to_gguf.py'] + sys.argv[3:]\n"
+            "import os; sys.argv = [os.path.join(sys.argv[1], 'convert_hf_to_gguf.py')] + sys.argv[3:]\n"
             "runpy.run_path(sys.argv[0], run_name='__main__')\n"
         )
         args = [str(model_dir), "--outfile", str(out_file), "--outtype", outtype]
         subprocess.run(
-            [sys.executable, "-c", code, str(self.source), pre_tokenizer, *args], check=True
+            [sys.executable, "-c", code, str(self.source), pre_tokenizer, *args],
+            check=True, env=_child_env(),
         )
         return out_file
 
@@ -146,7 +173,7 @@ class LlamaCpp:
         if imatrix:
             cmd += ["--imatrix", str(imatrix)]
         cmd += [str(src), str(dst), qtype]
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, env=_child_env())
         return dst
 
     def imatrix(self, gguf: Path, corpus: Path, out: Path, ctx_size: int = 512) -> Path:
@@ -163,18 +190,28 @@ class LlamaCpp:
             "-c", str(ctx_size),
             "-t", str(os.cpu_count() or 4),
         ]
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, env=_child_env())
         return out
 
 
+def _exe(name: str) -> str:
+    return name + (".exe" if sys.platform == "win32" else "")
+
+
+def _child_env() -> dict[str, str]:
+    """Force UTF-8 in Python child processes (the Windows default code page chokes on some output)."""
+    return {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+
+
 def _find_bin_dir(root: Path) -> Path | None:
-    exe = "llama-quantize.exe" if sys.platform == "win32" else "llama-quantize"
-    if not root.exists():
+    exe = _exe("llama-quantize")
+    if not root.is_dir():
         return None
-    for candidate in [root, root / "build" / "bin", *root.rglob("")]:
-        if (candidate / exe).exists():
+    for candidate in (root, root / "bin", root / "build" / "bin"):
+        if (candidate / exe).is_file():
             return candidate
-    return None
+    found = next(root.rglob(exe), None)
+    return found.parent if found else None
 
 
 def ollama_create(name: str, gguf: Path, params: dict[str, str] | None = None) -> None:
@@ -182,5 +219,11 @@ def ollama_create(name: str, gguf: Path, params: dict[str, str] | None = None) -
     lines = [f"FROM {gguf.resolve()}"]
     for key, value in (params or {}).items():
         lines.append(f"PARAMETER {key} {value}")
-    modelfile.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    subprocess.run(["ollama", "create", name, "-f", str(modelfile)], check=True)
+    modelfile.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    ollama = shutil.which("ollama")
+    if ollama is None:
+        raise FileNotFoundError(
+            "`ollama` not found on PATH. Install Ollama (https://ollama.com) or import the GGUF later with "
+            f"`ollama create {name} -f {modelfile}`."
+        )
+    subprocess.run([ollama, "create", name, "-f", str(modelfile)], check=True)

@@ -66,9 +66,9 @@ def test_configs_point_at_the_same_special_tokens(model_dir, corpus_dir, tmp_pat
     out = tmp_path / "out"
     report = trim_model(model_dir, out, [corpus_dir], SelectionConfig())
     tok = Tokenizer.from_file(str(out / "tokenizer.json"))
-    config = json.loads((out / "config.json").read_text())
-    gen = json.loads((out / "generation_config.json").read_text())
-    tok_cfg = json.loads((out / "tokenizer_config.json").read_text())
+    config = json.loads((out / "config.json").read_text(encoding="utf-8"))
+    gen = json.loads((out / "generation_config.json").read_text(encoding="utf-8"))
+    tok_cfg = json.loads((out / "tokenizer_config.json").read_text(encoding="utf-8"))
 
     eos = tok.token_to_id("<|endoftext|>")
     assert config["eos_token_id"] == [eos] and gen["eos_token_id"] == eos
@@ -76,7 +76,7 @@ def test_configs_point_at_the_same_special_tokens(model_dir, corpus_dir, tmp_pat
     assert config["vocab_size"] == config["text_config"]["vocab_size"] == report.vocab_after
     assert tok_cfg["added_tokens_decoder"][str(eos)]["content"] == "<|endoftext|>"
     assert (out / "chat_template.jinja").exists()
-    index = json.loads((out / "model.safetensors.index.json").read_text())
+    index = json.loads((out / "model.safetensors.index.json").read_text(encoding="utf-8"))
     assert index["metadata"]["total_size"] == report.weight_bytes_after
 
 
