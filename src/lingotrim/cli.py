@@ -197,7 +197,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--imatrix", action="store_true",
                    help="build an importance matrix from the fit corpus and use it for --quantize")
     s.add_argument("--ollama", help="import final GGUF into Ollama under this name")
-    s.add_argument("--llama-cpp", help="llama.cpp dir (default: auto-download pinned release)")
+    s.add_argument("--llama-cpp", help="llama.cpp dir (default: auto-download latest release)")
     s.add_argument("--verify-logits", action="store_true", help="also compare logits (small models)")
     s.set_defaults(func=_cmd_run)
     return p

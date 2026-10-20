@@ -29,7 +29,7 @@ class TokenizerJson:
             raise UnsupportedTokenizer(f"only BPE tokenizers are supported, got {model.get('type')}")
         if not _has_bytelevel(data.get("pre_tokenizer")):
             raise UnsupportedTokenizer(
-                "only byte-level BPE (Qwen, Llama 3, GPT-style) is supported for now"
+                "only byte-level BPE tokenizers are supported (tested on Qwen)"
             )
         self.data = data
         self.vocab: dict[str, int] = model["vocab"]
