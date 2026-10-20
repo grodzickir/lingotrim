@@ -149,6 +149,23 @@ class LlamaCpp:
         subprocess.run(cmd, check=True)
         return dst
 
+    def imatrix(self, gguf: Path, corpus: Path, out: Path, ctx_size: int = 512) -> Path:
+        """Build an importance matrix with `llama-imatrix` from calibration text.
+
+        `ctx_size` is the context length per calibration chunk (`-c`). Pass the result to `quantize`.
+        """
+        out.parent.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            str(self.binary("llama-imatrix")),
+            "-m", str(gguf),
+            "-f", str(corpus),
+            "-o", str(out),
+            "-c", str(ctx_size),
+            "-t", str(os.cpu_count() or 4),
+        ]
+        subprocess.run(cmd, check=True)
+        return out
+
 
 def _find_bin_dir(root: Path) -> Path | None:
     exe = "llama-quantize.exe" if sys.platform == "win32" else "llama-quantize"

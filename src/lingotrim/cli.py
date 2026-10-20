@@ -69,7 +69,16 @@ def _cmd_verify(args) -> int:
             return 1
     if args.json:
         print(json.dumps(result.__dict__, ensure_ascii=False))
-    return 0 if result.lossless else 1
+    return 0 if result.preserved else 1
+
+
+def _cmd_imatrix(args) -> int:
+    from .llamacpp import LlamaCpp
+
+    llama = LlamaCpp.ensure(args.llama_cpp)
+    out = llama.imatrix(Path(args.gguf), Path(args.corpus), Path(args.out), args.ctx_size)
+    print(f"imatrix: {out}")
+    return 0
 
 
 def _cmd_export(args) -> int:
@@ -80,8 +89,13 @@ def _cmd_export(args) -> int:
     pre = llama.detect_pre_tokenizer(original)
     print(f"pre-tokenizer: {pre}")
     final = llama.convert(trimmed, out, pre, args.outtype)
+    imatrix_path = None
+    if args.imatrix and args.quantize:
+        imatrix_path = out.with_name(f"{out.stem}.imatrix")
+        llama.imatrix(out, Path(args.imatrix), imatrix_path)
+        print(f"imatrix: {imatrix_path}")
     for qtype in args.quantize:
-        final = llama.quantize(out, out.with_name(f"{out.stem}-{qtype}.gguf"), qtype)
+        final = llama.quantize(out, out.with_name(f"{out.stem}-{qtype}.gguf"), qtype, imatrix_path)
         print(f"quantized: {final}")
     if args.ollama:
         ollama_create(args.ollama, final)
@@ -103,6 +117,7 @@ def _cmd_run(args) -> int:
         min_freq=args.min_freq,
         quantize=args.quantize,
         gguf_type=args.gguf or ("bf16" if (args.quantize or args.ollama) else None),
+        imatrix=args.imatrix,
         ollama=args.ollama,
         llama_cpp=args.llama_cpp,
         verify_logits=args.verify_logits,
@@ -134,16 +149,24 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-ascii", action="store_true", help="do not force-keep pure ASCII tokens")
     s.set_defaults(func=_cmd_trim)
 
-    s = sub.add_parser("verify", help="check that the trimmed tokenizer reproduces the original tokenization on held-out text")
+    s = sub.add_parser("verify", help="check that the trimmed tokenizer reproduces the original tokenization")
     s.add_argument("original")
     s.add_argument("trimmed")
     s.add_argument("--corpus", nargs="+", required=True, help="held-out target-language text")
     s.add_argument("--logits", action="store_true",
-                   help="also measure max logit difference on kept tokens (optional, small models, needs `verify`)")
+                   help="also measure max logit difference on kept tokens (optional, needs `verify`)")
     s.add_argument("--logit-samples", type=int, default=8)
     s.add_argument("--atol", type=float, default=1e-3, help="fail if max logit diff exceeds this")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=_cmd_verify)
+
+    s = sub.add_parser("imatrix", help="build an importance matrix (llama-imatrix) from calibration text")
+    s.add_argument("gguf", help="full-precision (f16/bf16) .gguf path")
+    s.add_argument("--corpus", required=True, help="calibration text file (e.g. corpus/fit concatenated)")
+    s.add_argument("--out", required=True, help="output .imatrix path")
+    s.add_argument("--ctx-size", type=int, default=512, help="context length per calibration chunk")
+    s.add_argument("--llama-cpp", help="llama.cpp checkout/build dir (default: auto-download)")
+    s.set_defaults(func=_cmd_imatrix)
 
     s = sub.add_parser("export", help="convert a trimmed model to GGUF and optionally quantize")
     s.add_argument("original", help="untrimmed model dir (used to detect the pre-tokenizer type)")
@@ -151,6 +174,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--out", required=True, help="output .gguf path (full precision)")
     s.add_argument("--outtype", default="bf16", choices=["f32", "f16", "bf16", "q8_0"])
     s.add_argument("--quantize", nargs="*", default=[], help="k-quant types, e.g. Q4_K_M Q5_K_M")
+    s.add_argument("--imatrix", metavar="CORPUS",
+                   help="calibration text file; builds an importance matrix (llama-imatrix) and uses it "
+                        "when quantizing (requires --quantize)")
     s.add_argument("--ollama", help="also import the last GGUF into Ollama under this name")
     s.add_argument("--llama-cpp", help="llama.cpp checkout/build dir (default: auto-download)")
     s.set_defaults(func=_cmd_export)
@@ -168,6 +194,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--gguf", nargs="?", const="bf16", default=None, metavar="TYPE",
                    help="export GGUF (default type bf16 when flag given without value)")
     s.add_argument("--quantize", "-q", nargs="*", default=[], help="k-quant types, e.g. Q4_K_M")
+    s.add_argument("--imatrix", action="store_true",
+                   help="build an importance matrix from the fit corpus and use it for --quantize")
     s.add_argument("--ollama", help="import final GGUF into Ollama under this name")
     s.add_argument("--llama-cpp", help="llama.cpp dir (default: auto-download pinned release)")
     s.add_argument("--verify-logits", action="store_true", help="also compare logits (small models)")

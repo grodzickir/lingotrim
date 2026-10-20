@@ -10,6 +10,9 @@ from .selection import SelectionConfig, iter_corpus_texts
 
 MODEL_FILES = ["*.safetensors", "*.json", "*.txt", "*.jinja", "LICENSE*", "*.md", "tokenizer.model"]
 
+# Calibration text budget for llama-imatrix (characters, split evenly across the fit files).
+IMATRIX_CALIBRATION_CHARS = 4_000_000
+
 
 @dataclass
 class RunConfig:
@@ -23,6 +26,7 @@ class RunConfig:
     min_freq: int = 1
     quantize: list[str] = field(default_factory=list)
     gguf_type: str = "bf16"
+    imatrix: bool = False
     ollama: str | None = None
     llama_cpp: str | None = None
     verify_logits: bool = False
@@ -114,11 +118,25 @@ def run(cfg: RunConfig) -> dict:
     result["gguf"] = {cfg.gguf_type: str(base)}
 
     print("== 6/6 quantize")
+    imatrix_path = None
+    if cfg.imatrix and cfg.quantize:
+        imatrix_path = gguf_dir / f"{trimmed.name}.imatrix"
+        if not imatrix_path.exists():
+            calib = gguf_dir / f"{trimmed.name}-calibration.txt"
+            fit_files = sorted((corpus / "fit").glob("*.txt"))
+            budget = IMATRIX_CALIBRATION_CHARS // max(len(fit_files), 1)
+            calib.write_text(
+                "".join(f.read_text(encoding="utf-8", errors="replace")[:budget] for f in fit_files),
+                encoding="utf-8",
+            )
+            llama.imatrix(base, calib, imatrix_path)
+        result["imatrix"] = str(imatrix_path)
+        print(f"imatrix: {imatrix_path}")
     final = base
     for qtype in cfg.quantize:
         dst = gguf_dir / f"{trimmed.name}-{qtype}.gguf"
         if not dst.exists():
-            llama.quantize(base, dst, qtype)
+            llama.quantize(base, dst, qtype, imatrix_path)
         result["gguf"][qtype] = str(dst)
         final = dst
     if cfg.ollama:
